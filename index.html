@@ -453,10 +453,45 @@ async function admit(session){
     return;
   }
   entered=true; box.hidden=true;
+  const lock=document.querySelector('.rail-foot .lock'); if(lock){ const t=lock.querySelector('span'); if(t) t.textContent='Matching runs in this browser. Saved work is stored in the team database, visible only to approved members.' }
   const foot=document.querySelector('.rail-foot');
-  if(foot){ const w=document.createElement('div'); w.className='who'; w.innerHTML=`<span title="${escH(session.user.email)}">${escH(session.user.email)}</span><button type="button">Sign out</button>`;
-    w.querySelector('button').onclick=()=>sb.auth.signOut(); foot.prepend(w) }
+  if(foot){ const w=document.createElement('div'); w.className='who'; w.innerHTML=`<span title="${escH(session.user.email)}">${escH(session.user.email)}</span><button type="button" id="authSignOut">Sign out</button>`;
+    w.querySelector('#authSignOut').onclick=()=>sb.auth.signOut(); foot.prepend(w);
+    const imp=document.createElement('div'); imp.className='who'; imp.innerHTML='<button type="button" id="importBackup">Import backup…</button><input type="file" id="importFile" accept=".json,.gz,application/json,application/gzip" hidden>';
+    imp.querySelector('#importBackup').onclick=()=>imp.querySelector('#importFile').click();
+    imp.querySelector('#importFile').onchange=e=>{ const f=e.target.files[0]; e.target.value=''; if(f) importBackup(f) };
+    w.after(imp) }
   ready();
+}
+
+/* ---- import a backup file (records exported from the Claude artifact): {v:1, collections:{name:{id:data}}} ---- */
+const IMPORT_COLLS=['comparisons','days','cases','profiles'];
+async function readBackup(file){
+  let stream=file.stream();
+  const head=new Uint8Array(await file.slice(0,2).arrayBuffer());
+  if(head[0]===0x1f&&head[1]===0x8b) stream=stream.pipeThrough(new DecompressionStream('gzip'));
+  const j=JSON.parse(await new Response(stream).text());
+  if(!j||j.v!==1||typeof j.collections!=='object') throw new Error('This isn’t a Ledger Match backup file.');
+  return j;
+}
+async function importBackup(file){
+  const say=(t,sub)=>window.overlay?overlay(true,t,sub):null;
+  try{
+    say('Reading backup',file.name);
+    const j=await readBackup(file);
+    const rows=[]; for(const c of IMPORT_COLLS) for(const [id,data] of Object.entries(j.collections[c]||{})) rows.push({collection:c,id,data});
+    if(!rows.length) throw new Error('The backup has no records.');
+    const counts=IMPORT_COLLS.map(c=>[c,Object.keys(j.collections[c]||{}).length]).filter(x=>x[1]).map(x=>`${x[1]} ${x[0]}`).join(', ');
+    if(window.overlay) overlay(false);
+    if(!confirm(`Import ${counts}?\n\nRecords with the same name already in the database will be replaced.`)) return;
+    let batch=[], size=0, done=0; const now=new Date().toISOString();
+    const flush=async()=>{ if(!batch.length) return; const {error}=await sb.from('docs').upsert(batch); if(error) throw fail(error); done+=batch.length; batch=[]; size=0; say('Importing records',`${done} of ${rows.length}`) };
+    say('Importing records',`0 of ${rows.length}`);
+    for(const r of rows){ const n=JSON.stringify(r.data).length; if(size+n>1500000) await flush(); batch.push({...r,updated_at:now}); size+=n }
+    await flush();
+    say('Import finished',`${rows.length} records — reloading`);
+    setTimeout(()=>location.reload(),800);
+  }catch(e){ if(window.overlay) overlay(false); alert('Import failed: '+((e&&e.message)||e)) }
 }
 sb.auth.onAuthStateChange((ev,session)=>{
   if(ev==='PASSWORD_RECOVERY'){ mode='newpw'; form(); return }
