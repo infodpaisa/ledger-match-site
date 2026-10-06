@@ -3268,8 +3268,8 @@ function bindCaseTable(el){
   el.querySelectorAll('[data-cresgo]').forEach(b=>b.onclick=async()=>{ const reason=$('#resWhy').value, note=$('#resNote').value.trim(); if(reason==='Other'&&!note){ toast('Add a note when the reason is “Other”.'); return }
     LG.resolving=null; await setCaseStatus([b.dataset.cresgo],()=>({st:'res',r:{reason,note,at:new Date().toISOString(),day:todayStr(),auto:false}})); toast('Item resolved') });
   el.querySelectorAll('[data-creopen]').forEach(b=>b.onclick=async()=>{ await setCaseStatus([b.dataset.creopen],()=>({st:'open',r:null})); toast('Item reopened') });
-  el.querySelectorAll('[data-csel]').forEach(b=>b.onchange=()=>{ b.checked?LG.sel.add(b.dataset.csel):LG.sel.delete(b.dataset.csel); const n=$('#selN'); if(n) n.textContent=LG.sel.size });
-  const all=$('#cAll'); if(all) all.onchange=()=>{ el.querySelectorAll('[data-csel]:not(:disabled)').forEach(b=>{ b.checked=all.checked; all.checked?LG.sel.add(b.dataset.csel):LG.sel.delete(b.dataset.csel) }); const n=$('#selN'); if(n) n.textContent=LG.sel.size };
+  el.querySelectorAll('[data-csel]').forEach(b=>b.onchange=()=>{ b.checked?LG.sel.add(b.dataset.csel):LG.sel.delete(b.dataset.csel); const n=$('#selInfo'); if(n) n.innerHTML=selInfo() });
+  const all=$('#cAll'); if(all) all.onchange=()=>{ el.querySelectorAll('[data-csel]:not(:disabled)').forEach(b=>{ b.checked=all.checked; all.checked?LG.sel.add(b.dataset.csel):LG.sel.delete(b.dataset.csel) }); const n=$('#selInfo'); if(n) n.innerHTML=selInfo() };
 }
 /* Re-check every open item against all saved reports that came after it (confirmed-only), e.g. after uploading days out of order */
 function idxFromFile(f,map,smText){
@@ -3341,6 +3341,21 @@ function renderCases(m){
   m.querySelectorAll('[data-lacct]').forEach(b=>b.onclick=()=>{LG.acct=b.dataset.lacct; setAccount(LGR(LG.acct).acct); LG.cf.type=''; LG.sel.clear(); renderCases(m); renderSteps()});
   renderCasesBody();
 }
+/* totals for the filtered list (every matching item, not only the rows drawn) and for the selection */
+const sumA=l=>l.reduce((s,c)=>s+(c.a||0),0);
+function cfSummary(list){
+  const f=LG.cf, op=list.filter(c=>c.st!=='res'), rs=list.filter(c=>c.st==='res');
+  const age=f.age&&[['0-1','0–1 days'],['2-3','2–3 days'],['4-7','4–7 days'],['8-99999','over 7 days']].find(x=>x[0]===f.age);
+  const tags=[{open:'Open',res:'Resolved',all:'Open and resolved'}[f.show]].concat(f.type?[ctShort(f.type,LG.acct)]:[],age?['Age '+age[1]]:[],f.q?[`ID contains “${f.q}”`]:[]);
+  const filtered=f.show!=='open'||f.type||f.age||f.q;
+  const tile=(lbl,l,cls)=>`<div class="kpi ${cls||''}" style="padding:10px 14px"><span class="lbl">${lbl}</span><div class="v" style="font-size:19px;line-height:1.4">PKR ${pk(sumA(l))}</div><div class="s">${fmtInt(l.length)} item${l.length===1?'':'s'}</div></div>`;
+  return `<div class="panel-b stack" id="cfSum" style="gap:8px;border-top:1px solid var(--line);background:var(--surface-2)">
+    <div class="row" style="gap:6px;flex-wrap:wrap;font-size:12.5px"><span class="faint">Filter:</span>${tags.map(t=>`<span class="badge b-none">${esc(t)}</span>`).join('')}${filtered?'<button class="link" id="cfClear" style="font-size:12.5px">Clear filters</button>':''}</div>
+    <div class="kpis" style="grid-template-columns:repeat(${f.show==='all'?3:1},minmax(0,${f.show==='all'?'1fr':'320px'}));margin:0">${tile('Total value of matching items',list)}${f.show==='all'?tile('Still open',op)+tile('Resolved',rs):''}</div>
+    ${list.length>500?`<span class="faint" style="font-size:12px">Totals cover all ${fmtInt(list.length)} matching items; the table below lists the first 500.</span>`:''}</div>`;
+}
+function selInfo(){ if(!LG.sel.size) return '0 selected'; const by=new Map(allCases(LG.acct).map(c=>[c.doc+'|'+c.key,c])); let v=0; for(const rk of LG.sel){ const c=by.get(rk); if(c) v+=c.a||0 }
+  return `<b>${fmtInt(LG.sel.size)}</b> selected · PKR ${pk(v)}` }
 function renderCasesBody(){
   const el=$('#csBody'); if(!el) return; const f=LG.cf;
   const all=allCases(LG.acct), open=all.filter(c=>c.st!=='res');
@@ -3361,11 +3376,13 @@ function renderCasesBody(){
       <div class="field"><label for="cfAge">Age</label><select class="inp" id="cfAge"><option value="">Any</option>${bk.map(([t,lo,hi])=>`<option value="${lo}-${hi}" ${f.age===`${lo}-${hi}`?'selected':''}>${t}</option>`).join('')}</select></div>
       <div class="field"><label for="cfQ">Transaction ID</label><input class="inp" id="cfQ" value="${esc(f.q)}" placeholder="Search"></div>
     </div>
-    <div class="panel-h" style="border-top:1px solid var(--line)"><span class="faint" style="font-size:12.5px">${fmtInt(list.length)} item${list.length===1?'':'s'} · PKR ${pk(list.reduce((s,c)=>s+(c.a||0),0))}</span><span class="spacer"></span>
-      <span class="faint" style="font-size:12.5px"><span id="selN">${LG.sel.size}</span> selected</span>
+    ${cfSummary(list)}
+    <div class="panel-h" style="border-top:1px solid var(--line)"><span class="spacer"></span>
+      <span class="faint" style="font-size:12.5px" id="selInfo">${selInfo()}</span>
       <select class="inp" id="bulkWhy" style="height:28px;width:230px">${REASONS.map(r=>`<option>${r}</option>`).join('')}</select><input class="inp" id="bulkNote" placeholder="Note" style="height:28px;width:160px"><button class="btn sm primary" id="bulkGo">Resolve selected</button></div>
     ${casesTable(list,{})}</section></div>`;
   el.querySelectorAll('[data-age]').forEach(b=>b.onclick=()=>{f.age=f.age===b.dataset.age?'':b.dataset.age; f.show='open'; renderCasesBody()});
+  const cc=$('#cfClear'); if(cc) cc.onclick=()=>{ Object.assign(f,{q:'',type:'',age:'',show:'open'}); renderCasesBody() };
   el.querySelectorAll('[data-ctype]').forEach(b=>b.onclick=()=>{f.type=f.type===b.dataset.ctype?'':b.dataset.ctype; renderCasesBody()});
   $('#cfShow').onchange=()=>{f.show=$('#cfShow').value; renderCasesBody()}; $('#cfType').onchange=()=>{f.type=$('#cfType').value; renderCasesBody()}; $('#cfAge').onchange=()=>{f.age=$('#cfAge').value; renderCasesBody()};
   $('#cfQ').oninput=debounce(()=>{f.q=$('#cfQ').value; renderCasesBody(); const q=$('#cfQ'); q.focus(); q.setSelectionRange(q.value.length,q.value.length)},300);
