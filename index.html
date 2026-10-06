@@ -2607,6 +2607,9 @@ function renderLedgerBody(){
   const tot=rows.reduce((s,r)=>{ if(r.t){ s.dpN+=r.t.dpN||0; s.dpV+=r.t.dpV||0; s.jcN+=r.t.jcN||0; s.jcV+=r.t.jcV||0; s.days++ } return s },{dpN:0,dpV:0,jcN:0,jcV:0,days:0});
   const openNow=cases.filter(c=>c.st!=='res'), openAmt=openNow.reduce((s,c)=>s+(c.a||0),0);
   const SK=sessKeys(acct);
+  if(LG.calSel&&(LG.calSel.acct!==acct||LG.calSel.month!==month)) LG.calSel=null;
+  const CS=LG.calSel, nEmpty=rows.filter(r=>calCanSkip(r.day,r.ds)).length;
+  const nSelSkip=CS?[...CS.days].filter(ds=>calCanSkip(LG.days[dayId(acct,ds)],ds)).length:0, nSelUnskip=CS?[...CS.days].filter(ds=>calCanUnskip(LG.days[dayId(acct,ds)])).length:0;
   const lateDays=rows.filter(r=>r.ds<=today && SK.some(s=>sessionState(r.day,s,acct,r.ds)==='late')).length;
   el.innerHTML=`<div class="stack">
     <div class="kpis" style="grid-template-columns:repeat(5,minmax(0,1fr))">
@@ -2619,12 +2622,18 @@ function renderLedgerBody(){
     ${lateDays?`<div class="notice warn">${lateDays} day${lateDays>1?'s have':' has'} a session that is past due (${isPayout(acct)?`the ${P} payout report is due by 12 PM the next day`:`${P} files are available within the hour after each 12-hour window`}).</div>`:''}
     ${!acctStart(acct)?`<div class="notice" style="align-items:center"><span style="flex:1">No days in the <b>${esc(lgName(acct))}</b> ledger yet. ${isPayout(acct)?`Start with yesterday: upload the Dpaisa payout export and the ${P} payout report for the full day.`:`Start with today’s AM session: upload the Dpaisa portal export and the ${P} portal export for 12:00 AM – 11:59 AM.`}</span><button class="btn sm primary" id="lgStart">${isPayout(acct)?'Reconcile yesterday':'Reconcile today'}</button></div>`:''}
     <section class="panel"><div class="panel-h"><button class="btn sm" id="mPrev" aria-label="Previous month">←</button><h2 style="min-width:120px;text-align:center">${monthLabel(month)}</h2><button class="btn sm" id="mNext" aria-label="Next month">→</button>
-      <span class="spacer"></span><div class="legend"><span><i style="background:var(--ok)"></i>Reconciled</span><span><i style="background:var(--high)"></i>Past due</span><span><i style="background:var(--low)"></i>Imported</span><span><i style="background:var(--ink-3)"></i>Skipped</span><span><i style="background:var(--line-strong)"></i>Not yet</span></div></div>
+      <span class="spacer"></span><button class="btn sm ${CS?'primary':''}" id="calSelBtn" title="Select several days to mark them as skipped">${CS?'Done':'Select days'}</button><div class="legend"><span><i style="background:var(--ok)"></i>Reconciled</span><span><i style="background:var(--high)"></i>Past due</span><span><i style="background:var(--low)"></i>Imported</span><span><i style="background:var(--ink-3)"></i>Skipped</span><span><i style="background:var(--line-strong)"></i>Not yet</span></div></div>
+      ${CS?`<div class="panel-b row" style="gap:10px;flex-wrap:wrap;align-items:center;border-bottom:1px solid var(--line);background:var(--accent-soft)">
+        <b style="font-size:13px">${fmtInt(CS.days.size)} day${CS.days.size===1?'':'s'} selected</b><span class="faint" style="font-size:12px">Tap days with no transactions to mark them as skipped, or skipped days to undo.</span>
+        <button class="btn sm ghost" id="calAllEmpty" ${nEmpty?'':'disabled'}>Select all empty days (${fmtInt(nEmpty)})</button>${CS.days.size?'<button class="btn sm ghost" id="calClear">Clear</button>':''}<span class="spacer"></span>
+        <input id="calNote" placeholder="Note (optional), e.g. Public holiday" value="${esc(CS.note||'')}" style="height:30px;padding:0 8px;border:1px solid var(--line-strong);border-radius:6px;background:var(--surface);color:var(--ink);font:inherit;font-size:12.5px;min-width:200px">
+        <button class="btn sm primary" id="calSkipGo" ${nSelSkip?'':'disabled'}>Mark ${fmtInt(nSelSkip)} as skipped</button>${nSelUnskip?`<button class="btn sm" id="calUnskipGo">Undo skip on ${fmtInt(nSelUnskip)}</button>`:''}</div>`:''}
       <div class="panel-b"><div class="cal">${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d=>`<div class="dow">${d}</div>`).join('')}
         ${'<div></div>'.repeat(lead)}
         ${rows.map(r=>{ const fut=r.ds>today; const st=SK.map(s=>({s,v:fut?'none':sessionState(r.day,s,acct,r.ds)}));
           const closed=r.day&&r.day.closed;
-          return `<button class="dcell ${fut?'off':''}" ${fut?'disabled':''} data-day="${r.ds}"><div class="dnum"><span>${+r.ds.slice(8)}</span>${closed?'<span title="Closed" style="font-size:11px">🔒︎</span>':''}</div>
+          const pick=CS&&(calCanSkip(r.day,r.ds)||calCanUnskip(r.day)), dis=fut||(CS&&!pick), on=CS&&CS.days.has(r.ds);
+          return `<button class="dcell ${dis?'off':''} ${on?'sel':''}" ${dis?'disabled':''} data-day="${r.ds}" ${CS&&pick?`aria-pressed="${on}"`:''}><div class="dnum"><span>${+r.ds.slice(8)}</span>${on?'<span style="color:var(--accent);font-weight:700">✓</span>':''}${closed?'<span title="Closed" style="font-size:11px">🔒︎</span>':''}</div>
             <div class="sess">${st.map(x=>`<span class="${x.v==='none'?'':x.v}">${SESSIONS[x.s].label}</span>`).join('')}</div>
             ${r.day&&r.day.skipped?`<div class="dmeta faint">No transactions</div>`:r.t?`<div class="dmeta">${(r.t.dpN-r.t.jcN)?`<span class="bad">Δ ${fmtInt(r.t.dpN-r.t.jcN)} · ${pk(r.t.dpV-r.t.jcV)}</span>`:'Δ 0'}${r.rf.neu?`<br>${fmtInt(r.rf.neu)} new${r.rf.left?` · <span class="bad">${fmtInt(r.rf.left)} open</span>`:''}${r.rf.neu-r.rf.left?` · <span class="good">${r.rf.left?fmtInt(r.rf.neu-r.rf.left)+' resolved':'all resolved'}</span>`:''}`:''}</div>`:''}
           </button>`}).join('')}
@@ -2644,7 +2653,15 @@ function renderLedgerBody(){
   $('#mPrev').onclick=()=>{ const [yy,mm]=LG.month.split('-').map(Number); const d=new Date(Date.UTC(yy,mm-2,1)); LG.month=d.toISOString().slice(0,7); renderLedgerBody() };
   $('#mNext').onclick=()=>{ const [yy,mm]=LG.month.split('-').map(Number); const d=new Date(Date.UTC(yy,mm,1)); LG.month=d.toISOString().slice(0,7); renderLedgerBody() };
   const ls=$('#lgStart'); if(ls) ls.onclick=()=>openDay(acct,isPayout(acct)?addDays(todayStr(),-1):todayStr());
-  el.querySelectorAll('[data-day]').forEach(b=>{ b.onclick=()=>openDay(acct,b.dataset.day); b.onkeydown=e=>{ if(e.key==='Enter') openDay(acct,b.dataset.day) } });
+  el.querySelectorAll('[data-day]').forEach(b=>{ const act=()=>{ const C=LG.calSel; if(C&&b.classList.contains('dcell')){ const ds=b.dataset.day; C.days.has(ds)?C.days.delete(ds):C.days.add(ds); renderLedgerBody() } else openDay(acct,b.dataset.day) };
+    b.onclick=act; b.onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); act() } } });
+  const keepNote=()=>{ const n=$('#calNote'); if(n&&LG.calSel) LG.calSel.note=n.value };
+  $('#calSelBtn').onclick=()=>{ LG.calSel=LG.calSel?null:{acct,month,days:new Set(),note:''}; renderLedgerBody() };
+  const ae=$('#calAllEmpty'); if(ae) ae.onclick=()=>{ keepNote(); rows.forEach(r=>{ if(calCanSkip(r.day,r.ds)) LG.calSel.days.add(r.ds) }); renderLedgerBody() };
+  const cc=$('#calClear'); if(cc) cc.onclick=()=>{ keepNote(); LG.calSel.days.clear(); renderLedgerBody() };
+  const cn=$('#calNote'); if(cn) cn.oninput=keepNote;
+  const sg=$('#calSkipGo'); if(sg) sg.onclick=()=>calBulk(acct,'skip');
+  const ug=$('#calUnskipGo'); if(ug) ug.onclick=()=>calBulk(acct,'unskip');
 }
 async function exportLedgerMonth(){
   const dl=CAP.downloads; if(!dl){ toast('File downloads are not available in this view.'); return }
@@ -3178,19 +3195,30 @@ async function openSessionFull(acct,ds,s){
   }catch(e){ toast('Could not open: '+(e.message||e)) }
   overlay(false); render(); window.scrollTo({top:0});
 }
-async function skipDay(acct,ds,note){
-  if(!H.db){ toast('Saving isn’t available in this view.'); return }
+async function skipDay(acct,ds,note,quiet){
+  if(!H.db){ toast('Saving isn’t available in this view.'); return false }
   const id=dayId(acct,ds), d=LG.days[id], now=new Date().toISOString(), L0=LGR(acct);
-  if(d&&d.sessions&&Object.values(d.sessions).some(x=>x&&x.runAt)){ toast('This day already has reconciled sessions.'); return }
+  if(d&&d.sessions&&Object.values(d.sessions).some(x=>x&&x.runAt)){ if(!quiet) toast('This day already has reconciled sessions.'); return false }
   try{ await H.db.collection('days').doc(id).set({...(d?noId(d):{}),account:acct,acct:L0.acct,prov:L0.prov,date:ds,source:'skipped',sessions:{},totals:{dpN:0,dpV:0,jcN:0,jcV:0,tender:''},skipped:{at:now,note},updatedAt:now,
-      audit:[...((d&&d.audit)||[]),{at:now,msg:'Marked as skipped — no transactions'+(note?`: ${note}`:'')}].slice(-100)}); toast('Day marked as skipped') }
-  catch(e){ toast('Could not save: '+((e&&e.code)||e)) }
+      audit:[...((d&&d.audit)||[]),{at:now,msg:'Marked as skipped — no transactions'+(note?`: ${note}`:'')}].slice(-100)}); if(!quiet) toast('Day marked as skipped'); return true }
+  catch(e){ if(quiet) throw e; toast('Could not save: '+((e&&e.code)||e)); return false }
 }
-async function unskipDay(acct,ds){
-  const id=dayId(acct,ds), d=LG.days[id]; if(!d) return;
+async function unskipDay(acct,ds,quiet){
+  const id=dayId(acct,ds), d=LG.days[id]; if(!d||!d.skipped) return false;
   try{ if(!(d.audit&&d.audit.length>1)) await H.db.collection('days').doc(id).delete();
     else { const now=new Date().toISOString(), x={...noId(d),source:'daily',skipped:null,updatedAt:now,audit:[...(d.audit||[]),{at:now,msg:'Skip undone'}].slice(-100)}; delete x.totals; await H.db.collection('days').doc(id).set(x) }
-    toast('Skip undone') }catch(e){ toast('Could not save: '+((e&&e.code)||e)) }
+    if(!quiet) toast('Skip undone'); return true }catch(e){ if(quiet) throw e; toast('Could not save: '+((e&&e.code)||e)); return false }
+}
+/* calendar multi-select: mark many empty days as skipped (or undo skips) at once */
+const calCanSkip=(d,ds)=>ds<=todayStr()&&!(d&&(d.skipped||d.closed||d.source==='historic'||(d.sessions&&Object.values(d.sessions).some(x=>x&&x.runAt))));
+const calCanUnskip=d=>!!(d&&d.skipped&&!d.closed);
+async function calBulk(acct,mode){
+  const C=LG.calSel; if(!C) return; const note=(($('#calNote')||{}).value||'').trim();
+  const days=[...C.days].sort().filter(ds=>{ const d=LG.days[dayId(acct,ds)]; return mode==='skip'?calCanSkip(d,ds):calCanUnskip(d) }); if(!days.length) return;
+  let n=0; try{ for(const ds of days){ overlay(true,mode==='skip'?'Marking days as skipped':'Undoing skips',`${dLabel(ds)} · ${n+1} of ${days.length}`); if(await (mode==='skip'?skipDay(acct,ds,note,true):unskipDay(acct,ds,true))) n++ }
+    toast(mode==='skip'?`${n} day${n===1?'':'s'} marked as skipped`:`Skip undone on ${n} day${n===1?'':'s'}`); LG.calSel=null }
+  catch(e){ toast(`Stopped after ${n} of ${days.length} day(s): could not save (${(e&&e.code)||e})`) }
+  overlay(false); renderLedgerBody();
 }
 async function closeDay(acct,ds,note){
   const d=LG.days[dayId(acct,ds)]; if(!d) return; const now=new Date().toISOString();
