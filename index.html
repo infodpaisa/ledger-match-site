@@ -3338,9 +3338,9 @@ function renderCasesBody(){
 
 
 /* ============ Month import: full-month reports split into the daily ledger's sessions ============ */
-LG.mi=null;   // {acct, month, files:{internal,provider,settle}, replace, plan}
+LG.mi=null;   // {acct, month, files:{internal,provider,settle}, replace, plan, off:Set of 'date|session' keys the user unticked}
 
-function openMonthImport(){ const acct=LG.acct; LG.mi={acct, month:(LG.month&&LG.month<todayStr().slice(0,7))?LG.month:addMonths(todayStr().slice(0,7),-1), files:{}, replace:false, plan:null}; renderMonthImport(); const el=$('#lgImport'); if(el) el.scrollIntoView({behavior:'smooth',block:'start'}) }
+function openMonthImport(){ const acct=LG.acct; LG.mi={acct, month:(LG.month&&LG.month<todayStr().slice(0,7))?LG.month:addMonths(todayStr().slice(0,7),-1), files:{}, replace:false, plan:null, off:new Set()}; renderMonthImport(); const el=$('#lgImport'); if(el) el.scrollIntoView({behavior:'smooth',block:'start'}) }
 const addMonths=(m,n)=>{ const [y,mo]=m.split('-').map(Number); return new Date(Date.UTC(y,mo-1+n,1)).toISOString().slice(0,7) };
 
 /* date order for a month file: detected, else whichever reading puts more rows inside the month */
@@ -3363,6 +3363,9 @@ function bucketFile(f,side,acct,month){
 function subFile(f,x,ds,s,order){ return {name:`${f.name} · ${dLabel(ds)} ${SESSIONS[s].label}`,headers:f.headers,rows:x?x.rows:[],srcRow:x?x.src:[],profile:f.profile,profObj:f.profObj,builtin:f.builtin,keyGw:f.keyGw,dropped:f.dropped,
   win:{order,total:x?x.rows.length:0,kept:x?x.rows.length:0,other:0,otherDay:0,noTime:0,first:null,last:null}} }
 
+/* which sessions can be imported (or settled) under the current rules, and which of those are ticked */
+const miCan=(M,x)=>M.plan&&M.plan.mode==='settle'? (x.exists&&!x.closed) : (!x.closed&&(!x.exists||M.replace));
+const miTodo=M=>M.plan? M.plan.sess.filter(x=>miCan(M,x)&&!M.off.has(x.k)) : [];
 function miPlan(){
   const M=LG.mi, acct=M.acct, fi=M.files.internal, fp=M.files.provider, fs=M.files.settle;
   if(!fi&&!fp&&fs&&fs.profile==='eps'){ miPlanSettle(); return }
@@ -3398,7 +3401,7 @@ function renderMonthImport(){
     ${f&&!f.profile?`<div class="chk bad"><span class="i">✕</span><span>${f.wrong?`This looks like the ${esc(PROFILE_NAMES[f.wrong])}, not the ${esc(PROFILE_NAMES[wantProfile(acct,side)]||'expected file')}.`:'Layout not recognised. Reconcile one day of this layout first (the day view lets you map its columns once), then import the month.'}</span></div>`:''}
     <input type="file" id="mpick-${side}" accept=".csv,.xlsx,.xls" hidden></div>` };
   const SM=pl&&pl.mode==='settle';
-  const todo=pl?pl.sess.filter(x=>SM?(x.exists&&!x.closed):(!x.closed&&(!x.exists||M.replace))):[];
+  const todo=miTodo(M), can=pl?pl.sess.filter(x=>miCan(M,x)):[], allOn=can.length&&can.every(x=>!M.off.has(x.k)), someOn=can.some(x=>!M.off.has(x.k));
   el.innerHTML=`<section class="panel" style="border-color:var(--accent)"><div class="panel-h"><h2>Import a month · ${esc(lgName(acct))}</h2><span class="spacer"></span>
       <button class="btn sm" id="miPrev" aria-label="Previous month">←</button><b style="min-width:84px;text-align:center">${monthLabel(M.month)}</b><button class="btn sm" id="miNext" aria-label="Next month">→</button><button class="btn sm ghost" id="miClose">Close</button></div>
     <div class="panel-b stack" style="gap:10px">
@@ -3406,18 +3409,20 @@ function renderMonthImport(){
       <div class="grid-2">${slot('internal',isPayout(acct)?'Dpaisa payout export · month':'Dpaisa payin export · month')}${slot('provider',(isPayout(acct)?provOf(acct).long:`${P} ${SETL?'transaction report':'portal export'}`)+' · month')}</div>
       ${SETL?slot('settle','EP settlement report · month'):''}
       ${pl?`<div class="stack" style="gap:4px">${pl.checks.map(c=>`<div class="chk ${c.lvl}"><span class="i">${c.lvl==='ok'?'✓':c.lvl==='warn'?'!':'✕'}</span><span>${esc(c.msg)}</span></div>`).join('')}</div>
-        <div class="scroll-x" style="max-height:340px;overflow:auto"><table class="t res"><thead><tr><th>Day</th><th>Session</th><th class="num">Dpaisa rows</th><th class="num">${esc(P)} rows</th>${SETL&&pl.bs?'<th class="num">Settled rows</th>':''}<th>Will</th></tr></thead><tbody>
-          ${pl.sess.map(x=>`<tr class="${SM?(x.exists&&!x.closed?'is-ok':''):x.closed||(x.exists&&!M.replace)?'':'is-ok'}"><td class="mono">${dLabel(x.ds)}</td><td class="mono">${SESSIONS[x.s].label}</td><td class="num">${x.nI==null?'<span class="faint">saved</span>':fmtInt(x.nI)}</td><td class="num">${x.nP==null?'<span class="faint">saved</span>':fmtInt(x.nP)}</td>${SETL&&pl.bs?`<td class="num">${fmtInt(x.nS)}</td>`:''}
-            <td>${SM?(x.closed?'<span class="badge b-none">Skip · day closed</span>':!x.exists?'<span class="badge b-none">Skip · not reconciled yet</span>':`<span class="badge b-ok">${x.hasSettle?'Replace':'Record'} settlement</span>`):x.skipped?'<span class="badge b-none">Skip · marked no transactions</span>':x.closed?'<span class="badge b-none">Skip · day closed</span>':x.exists?(M.replace?`<span class="badge b-MEDIUM">Replace ${x.historic?'imported day':'session'}</span>`:`<span class="badge b-none">Skip · already ${x.historic?'imported':'reconciled'}</span>`):'<span class="badge b-ok">Import</span>'}</td></tr>`).join('')||`<tr><td colspan="6" class="faint" style="text-align:center;padding:20px">No rows fall in ${monthLabel(M.month)}.</td></tr>`}
+        <div class="scroll-x" style="max-height:340px;overflow:auto"><table class="t res"><thead><tr><th style="width:28px"><input type="checkbox" id="miAll" aria-label="Select all sessions" ${allOn?'checked':''} ${can.length?'':'disabled'}></th><th>Day</th><th>Session</th><th class="num">Dpaisa rows</th><th class="num">${esc(P)} rows</th>${SETL&&pl.bs?'<th class="num">Settled rows</th>':''}<th>Will</th></tr></thead><tbody>
+          ${pl.sess.map(x=>{ const c=miCan(M,x), on=c&&!M.off.has(x.k); return `<tr class="${on?'is-ok':''}"><td><input type="checkbox" data-misess="${x.k}" aria-label="${dLabel(x.ds)} ${SESSIONS[x.s].label}" ${on?'checked':''} ${c?'':'disabled'}></td><td class="mono">${dLabel(x.ds)}</td><td class="mono">${SESSIONS[x.s].label}</td><td class="num">${x.nI==null?'<span class="faint">saved</span>':fmtInt(x.nI)}</td><td class="num">${x.nP==null?'<span class="faint">saved</span>':fmtInt(x.nP)}</td>${SETL&&pl.bs?`<td class="num">${fmtInt(x.nS)}</td>`:''}
+            <td>${SM?(x.closed?'<span class="badge b-none">Skip · day closed</span>':!x.exists?'<span class="badge b-none">Skip · not reconciled yet</span>':`<span class="badge b-ok">${x.hasSettle?'Replace':'Record'} settlement</span>`):x.skipped?'<span class="badge b-none">Skip · marked no transactions</span>':x.closed?'<span class="badge b-none">Skip · day closed</span>':x.exists?(M.replace?`<span class="badge b-MEDIUM">Replace ${x.historic?'imported day':'session'}</span>`:`<span class="badge b-none">Skip · already ${x.historic?'imported':'reconciled'}</span>`):'<span class="badge b-ok">Import</span>'}${c&&!on?' <span class="badge b-none">Not selected</span>':''}</td></tr>` }).join('')||`<tr><td colspan="7" class="faint" style="text-align:center;padding:20px">No rows fall in ${monthLabel(M.month)}.</td></tr>`}
         </tbody></table></div>
         <div class="row" style="gap:12px">${!SM&&pl.sess.some(x=>x.exists&&!x.closed)?`<label class="row" style="gap:6px;font-size:12.5px"><input type="checkbox" id="miReplace" ${M.replace?'checked':''}> Replace days that already have data</label>`:''}<span class="spacer"></span>
-          <span class="faint" style="font-size:12.5px">${fmtInt(todo.length)} session${todo.length===1?'':'s'} to ${SM?'settle':'import'}</span><button class="btn primary" id="miGo" ${todo.length?'':'disabled'}>${SM?'Record settlement for':'Import'} ${fmtInt(todo.length)} session${todo.length===1?'':'s'}</button></div>`:''}
+          <span class="faint" style="font-size:12.5px">${fmtInt(todo.length)} of ${fmtInt(can.length)} session${can.length===1?'':'s'} selected${someOn&&!allOn&&!SM?' · sessions run in date order, so items from a left-out session aren’t checked':''}</span><button class="btn primary" id="miGo" ${todo.length?'':'disabled'}>${SM?'Record settlement for':'Import'} ${fmtInt(todo.length)} session${todo.length===1?'':'s'}</button></div>`:''}
     </div></section>`;
-  const mv=n=>{ M.month=addMonths(M.month,n); if(M.month>todayStr().slice(0,7)) M.month=todayStr().slice(0,7); miPlan(); renderMonthImport() };
+  const mv=n=>{ M.month=addMonths(M.month,n); M.off.clear(); if(M.month>todayStr().slice(0,7)) M.month=todayStr().slice(0,7); miPlan(); renderMonthImport() };
   $('#miPrev').onclick=()=>mv(-1); $('#miNext').onclick=()=>mv(1); $('#miClose').onclick=()=>{ LG.mi=null; renderMonthImport() };
   el.querySelectorAll('[data-mpick]').forEach(b=>{ const side=b.dataset.mpick, inp=$(`#mpick-${side}`); b.onclick=()=>inp.click(); inp.onchange=()=>{ if(inp.files[0]) miLoad(side,inp.files[0]) } });
   el.querySelectorAll('[data-mside]').forEach(sl=>{ sl.addEventListener('dragover',e=>e.preventDefault()); sl.addEventListener('drop',e=>{ e.preventDefault(); if(e.dataTransfer.files[0]) miLoad(sl.dataset.mside,e.dataTransfer.files[0]) }) });
   const rp=$('#miReplace'); if(rp) rp.onchange=()=>{ M.replace=rp.checked; renderMonthImport() };
+  el.querySelectorAll('[data-misess]').forEach(cb=>cb.onchange=()=>{ if(cb.checked) M.off.delete(cb.dataset.misess); else M.off.add(cb.dataset.misess); renderMonthImport() });
+  const all=$('#miAll'); if(all){ all.indeterminate=someOn&&!allOn; all.onchange=()=>{ for(const x of pl.sess) if(miCan(M,x)){ if(all.checked) M.off.delete(x.k); else M.off.add(x.k) } renderMonthImport() } }
   const go=$('#miGo'); if(go) go.onclick=SM?runMonthSettle:runMonthImport;
 }
 async function miLoad(side,file){
@@ -3432,7 +3437,7 @@ async function miLoad(side,file){
 async function runMonthImport(){
   const M=LG.mi, pl=M.plan, acct=M.acct; if(!pl) return;
   if(!H.db||!H.assets){ toast('Saving isn’t available in this view.'); return }
-  const todo=pl.sess.filter(x=>!x.closed&&(!x.exists||M.replace)); if(!todo.length) return;
+  const todo=miTodo(M); if(!todo.length) return;
   const fi=M.files.internal, fp=M.files.provider, fs=M.files.settle&&M.files.settle.profile==='eps'?M.files.settle:null;
   const st={docs:caseDocsCopy(acct),days:{...LG.days}}, P=PN(acct), at=new Date().toISOString();
   const imported={from:'month',month:M.month,at,files:[fi.name,fp.name].concat(fs?[fs.name]:[])};
@@ -3474,7 +3479,7 @@ function miPlanSettle(){
 async function runMonthSettle(){
   const M=LG.mi, pl=M.plan, acct=M.acct, fs=M.files.settle; if(!pl||pl.mode!=='settle') return;
   if(!H.db||!H.assets){ toast('Saving isn’t available in this view.'); return }
-  const todo=pl.sess.filter(x=>x.exists&&!x.closed); if(!todo.length) return;
+  const todo=miTodo(M); if(!todo.length) return;
   const st={docs:caseDocsCopy(acct),days:{...LG.days}};
   const settledAll=new Map(); { const c=settleCols(fs); for(const r of fs.rows){ const k=normId(r[c.id],'standard'); if(k) settledAll.set(k,{a:mic(r[c.amt]),net:mic(c.net>=0?r[c.net]:r[c.set]),date:String(r[c.sd]??'').trim(),batch:fs.name}) } }
   let done=0, ns=0, cl=0;
