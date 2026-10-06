@@ -2610,6 +2610,8 @@ function renderLedgerBody(){
   const openNow=cases.filter(c=>c.st!=='res'), openAmt=openNow.reduce((s,c)=>s+(c.a||0),0);
   const SK=sessKeys(acct);
   if(LG.calSel&&(LG.calSel.acct!==acct||LG.calSel.month!==month)) LG.calSel=null;
+  if(LG.clr&&(LG.clr.acct!==acct||(LG.clr.scope==='month'&&LG.clr.key!==month)||LG.clr.scope==='day')&&!LG.clr.busy) LG.clr=null;
+  const CL=LG.clr&&LG.clr.scope==='month'?LG.clr:null;
   const CS=LG.calSel, nEmpty=rows.filter(r=>calCanSkip(r.day,r.ds)).length;
   const nSelSkip=CS?[...CS.days].filter(ds=>calCanSkip(LG.days[dayId(acct,ds)],ds)).length:0, nSelUnskip=CS?[...CS.days].filter(ds=>calCanUnskip(LG.days[dayId(acct,ds)])).length:0;
   const lateDays=rows.filter(r=>r.ds<=today && SK.some(s=>sessionState(r.day,s,acct,r.ds)==='late')).length;
@@ -2624,7 +2626,8 @@ function renderLedgerBody(){
     ${lateDays?`<div class="notice warn">${lateDays} day${lateDays>1?'s have':' has'} a session that is past due (${isPayout(acct)?`the ${P} payout report is due by 12 PM the next day`:`${P} files are available within the hour after each 12-hour window`}).</div>`:''}
     ${!acctStart(acct)?`<div class="notice" style="align-items:center"><span style="flex:1">No days in the <b>${esc(lgName(acct))}</b> ledger yet. ${isPayout(acct)?`Start with yesterday: upload the Dpaisa payout export and the ${P} payout report for the full day.`:`Start with today’s AM session: upload the Dpaisa portal export and the ${P} portal export for 12:00 AM – 11:59 AM.`}</span><button class="btn sm primary" id="lgStart">${isPayout(acct)?'Reconcile yesterday':'Reconcile today'}</button></div>`:''}
     <section class="panel"><div class="panel-h"><button class="btn sm" id="mPrev" aria-label="Previous month">←</button><h2 style="min-width:120px;text-align:center">${monthLabel(month)}</h2><button class="btn sm" id="mNext" aria-label="Next month">→</button>
-      <span class="spacer"></span><button class="btn sm ${CS?'primary':''}" id="calSelBtn" title="Select several days to mark them as skipped">${CS?'Done':'Select days'}</button><div class="legend"><span><i style="background:var(--ok)"></i>Reconciled</span><span><i style="background:var(--high)"></i>Past due</span><span><i style="background:var(--low)"></i>Imported</span><span><i style="background:var(--ink-3)"></i>Skipped</span><span><i style="background:var(--line-strong)"></i>Not yet</span></div></div>
+      <span class="spacer"></span><button class="btn sm ${CS?'primary':''}" id="calSelBtn" title="Select several days to mark them as skipped">${CS?'Done':'Select days'}</button><button class="btn sm" id="calClrBtn" title="Delete everything saved for ${esc(monthLabel(month))} in this ledger">Clear month…</button><div class="legend"><span><i style="background:var(--ok)"></i>Reconciled</span><span><i style="background:var(--high)"></i>Past due</span><span><i style="background:var(--low)"></i>Imported</span><span><i style="background:var(--ink-3)"></i>Skipped</span><span><i style="background:var(--line-strong)"></i>Not yet</span></div></div>
+      ${CL?clearPanelHTML():''}
       ${CS?`<div class="panel-b row" style="gap:10px;flex-wrap:wrap;align-items:center;border-bottom:1px solid var(--line);background:var(--accent-soft)">
         <b style="font-size:13px">${fmtInt(CS.days.size)} day${CS.days.size===1?'':'s'} selected</b><span class="faint" style="font-size:12px">Tap days with no transactions to mark them as skipped, or skipped days to undo.</span>
         <button class="btn sm ghost" id="calAllEmpty" ${nEmpty?'':'disabled'}>Select all empty days (${fmtInt(nEmpty)})</button>${CS.days.size?'<button class="btn sm ghost" id="calClear">Clear</button>':''}<span class="spacer"></span>
@@ -2658,7 +2661,9 @@ function renderLedgerBody(){
   el.querySelectorAll('[data-day]').forEach(b=>{ const act=()=>{ const C=LG.calSel; if(C&&b.classList.contains('dcell')){ const ds=b.dataset.day; C.days.has(ds)?C.days.delete(ds):C.days.add(ds); renderLedgerBody() } else openDay(acct,b.dataset.day) };
     b.onclick=act; b.onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); act() } } });
   const keepNote=()=>{ const n=$('#calNote'); if(n&&LG.calSel) LG.calSel.note=n.value };
-  $('#calSelBtn').onclick=()=>{ LG.calSel=LG.calSel?null:{acct,month,days:new Set(),note:''}; renderLedgerBody() };
+  $('#calSelBtn').onclick=()=>{ LG.calSel=LG.calSel?null:{acct,month,days:new Set(),note:''}; LG.clr=null; renderLedgerBody() };
+  $('#calClrBtn').onclick=()=>{ LG.calSel=null; openClear(acct,'month',month) };
+  bindClear();
   const ae=$('#calAllEmpty'); if(ae) ae.onclick=()=>{ keepNote(); rows.forEach(r=>{ if(calCanSkip(r.day,r.ds)) LG.calSel.days.add(r.ds) }); renderLedgerBody() };
   const cc=$('#calClear'); if(cc) cc.onclick=()=>{ keepNote(); LG.calSel.days.clear(); renderLedgerBody() };
   const cn=$('#calNote'); if(cn) cn.oninput=keepNote;
@@ -2712,6 +2717,8 @@ function renderDayBody(){
       <div style="flex:1;min-width:240px"><h3>Close this day</h3><p class="muted" style="font-size:12.5px">Locks the day’s files and totals. Open items stay open and carry forward.</p></div>
       <input class="inp" id="closeNote" style="max-width:320px" placeholder="Closing note (optional)">
       <button class="btn primary" id="closeDay" ${sessKeys(acct).every(s=>day.sessions&&day.sessions[s]&&day.sessions[s].runAt)?'':'disabled title="Reconcile every session first"'}>Close day</button></div></section>`:''}
+    ${day||mine.length?(LG.clr&&LG.clr.scope==='day'&&LG.clr.acct===acct&&LG.clr.key===ds?`<section class="panel" style="border-color:var(--high)">${clearPanelHTML()}</section>`
+      :`<div class="row" style="justify-content:flex-end;gap:8px"><span class="faint" style="font-size:12.5px">Start this day over?</span><button class="btn sm" id="clrDayOpen">Clear day…</button></div>`):''}
     ${day&&day.audit&&day.audit.length?`<section class="panel"><div class="panel-h"><h2>Activity</h2></div><div class="panel-b">${day.audit.slice().reverse().map(a=>`<div class="row" style="gap:10px;font-size:12.5px;padding:3px 0"><span class="mono faint" style="width:150px">${new Date(a.at).toLocaleString()}</span><span>${esc(a.msg)}</span></div>`).join('')}</div></section>`:''}
   </div>`;
   bindCaseTable(el);
@@ -2721,6 +2728,8 @@ function renderDayBody(){
   if(!skipped){ sessKeys(acct).forEach(s=>bindSession(acct,ds,s)); if(!histo&&!isPayout(acct)) bindWholeDay(acct,ds) }
   const so=$('#skipOpen'); if(so) so.onclick=()=>{ $('#skipBox').innerHTML=`<span class="faint" style="font-size:12.5px">Mark ${dLabel(ds)} as a day with no transactions for ${esc(lgName(acct))}?</span><input class="inp" id="skipNote" placeholder="Reason (optional)" style="width:220px;height:28px"><button class="btn sm primary" id="skipGo">Mark skipped</button><button class="btn sm ghost" id="skipCancel">Cancel</button>`; $('#skipNote').focus(); $('#skipCancel').onclick=renderDayBody; $('#skipGo').onclick=()=>skipDay(acct,ds,$('#skipNote').value.trim()) };
   const us=$('#unskipDay'); if(us) us.onclick=()=>unskipDay(acct,ds);
+  const cdo=$('#clrDayOpen'); if(cdo) cdo.onclick=()=>openClear(acct,'day',ds);
+  bindClear();
 }
 function sessionCard(acct,ds,day,s,closed){
   const S0=day&&day.sessions&&day.sessions[s], dr=LG.draft[s], st=sessionState(day,s,acct,ds), P=PN(acct), SETL=provOf(acct).settlement;
@@ -3785,6 +3794,95 @@ async function runWholeDay(acct,ds){
     toast(pl.stlOnly?`${dLabel(ds)} settlement recorded · ${stlMsg.join(' · ')}`:`${dLabel(ds)} reconciled from whole-day files · ${fmtInt(newN)} new item(s)${autoN?`, ${fmtInt(autoN)} cleared`:''}${stlMsg.length?' · '+stlMsg.join(' · '):''}`);
   }catch(e){ console.error(e); toast('Whole-day upload stopped: '+((e&&(e.code||e.message))||e)+' — sessions finished before it were saved') }
   overlay(false); renderDayBody();
+}
+
+/* ============ Clear a day or a month: delete one ledger's records, open items and files for those dates ============ */
+/* What goes: the day documents, every case document raised on those dates (open and resolved items), and the uploaded
+   files those days point to (unless another day or a saved comparison still uses the same file).
+   What is undone elsewhere in the same ledger: items from other days that these dates auto-resolved are reopened, and
+   "seen again" notes written by these dates are removed. Other ledgers and other dates are never touched. */
+LG.clr=null;   // {acct, scope:'day'|'month', key, dates, plan|null, busy}
+
+function blobIdsIn(o,out=new Set(),inBlobs=false){
+  if(Array.isArray(o)) o.forEach(x=>blobIdsIn(x,out,inBlobs));
+  else if(o&&typeof o==='object') for(const [k,v] of Object.entries(o)) blobIdsIn(v,out,inBlobs||k==='blobs');
+  else if(inBlobs&&typeof o==='string'&&o) out.add(o);
+  return out;
+}
+const monthDates=m=>{ const [y,mo]=m.split('-').map(Number), n=new Date(Date.UTC(y,mo,0)).getUTCDate(); return Array.from({length:n},(_,i)=>`${m}-${String(i+1).padStart(2,'0')}`) };
+
+async function clearPlan(acct,dates){
+  const set=new Set(dates), labels=new Set(dates.map(dLabel));
+  const days=dates.map(ds=>LG.days[dayId(acct,ds)]).filter(Boolean);
+  const caseDocs=new Map(Object.values(LG.cases).filter(d=>d.account===acct&&set.has(d.date)).map(d=>[d.id,d]));
+  // case documents are split into parts (_0, _1, …); look for parts the live view may not have loaded
+  if(H.db) for(const ds of dates){ let miss=0;
+    for(let n=0;n<500&&miss<2;n++){ const id=`${acct}_${ds}_${n}`; if(caseDocs.has(id)){ miss=0; continue }
+      try{ const g=await H.db.collection('cases').doc(id).get(); if(g&&g.exists){ const d=g.data(); if(d&&d.account===acct&&d.date===ds){ caseDocs.set(id,{id,...d}); miss=0; continue } } miss++ }catch(e){ break } } }
+  let items=0, open=0; for(const d of caseDocs.values()) for(const c of Object.values(d.items||{})){ items++; if(c.st!=='res') open++ }
+  // items on other days of this ledger that these dates auto-resolved or annotated
+  const touch=[]; let reopen=0, notes=0;
+  for(const d of Object.values(LG.cases)){ if(d.account!==acct||set.has(d.date)||caseDocs.has(d.id)) continue; let ch=null;
+    for(const [k,c] of Object.entries(d.items||{})){
+      const auto=c.st==='res'&&c.r&&c.r.auto&&set.has(c.r.day), up=c.upd&&c.upd.where&&labels.has(String(c.upd.where).replace(/\s+(AM|PM|Day)$/,''));
+      if(!auto&&!up) continue; ch=ch||{...d,items:{...d.items}}; const x={...c};
+      if(auto){ x.st='open'; delete x.r; reopen++ } if(up){ delete x.upd; notes++ } ch.items[k]=x }
+    if(ch) touch.push(ch) }
+  // files: only those no other record still points to
+  const mine=blobIdsIn(days), keep=new Set();
+  for(const d of Object.values(LG.days)) if(!(d.account===acct&&set.has(d.date))) blobIdsIn(d,keep);
+  for(const c of H.list||[]) blobIdsIn({blobs:c.blobs},keep);
+  const files=[...mine].filter(b=>!keep.has(b)), shared=mine.size-files.length;
+  const closed=days.filter(d=>d.closed).length, sessions=days.reduce((n,d)=>n+Object.values(d.sessions||{}).filter(x=>x&&x.runAt).length,0);
+  return {acct,dates,days:days.map(d=>d.id),daysN:days.length,closed,sessions,caseIds:[...caseDocs.keys()],items,open,touch,reopen,notes,files,shared};
+}
+async function openClear(acct,scope,key){
+  const dates=scope==='day'?[key]:monthDates(key).filter(ds=>ds<=todayStr()||LG.days[dayId(acct,ds)]);
+  LG.clr={acct,scope,key,dates,plan:null}; refreshClear();
+  try{ const plan=await clearPlan(acct,dates); if(LG.clr&&LG.clr.key===key&&LG.clr.acct===acct) LG.clr.plan=plan }catch(e){ toast('Could not prepare: '+((e&&e.message)||e)); LG.clr=null }
+  refreshClear();
+}
+function refreshClear(){ if(S.step==='dayv') renderDayBody(); else if(S.step==='ledger') renderLedgerBody() }
+function clearPanelHTML(){
+  const C=LG.clr; if(!C) return ''; const what=C.scope==='day'?dLabel(C.key):monthLabel(C.key), P=C.plan;
+  const head=`<b style="font-size:13px;color:var(--high)">Clear ${esc(what)} · ${esc(lgName(C.acct))}</b>`;
+  if(!P) return `<div class="panel-b row" style="gap:10px;border-bottom:1px solid var(--line);background:var(--high-soft)">${head}<span class="spin"></span><span class="faint" style="font-size:12.5px">Checking what this would delete…</span></div>`;
+  const empty=!P.daysN&&!P.caseIds.length&&!P.files.length;
+  const li=(n,t)=>`<li>${t.replace('#',`<b>${fmtInt(n)}</b>`)}</li>`;
+  return `<div class="panel-b stack" id="clrPanel" style="gap:8px;border-bottom:1px solid var(--line);background:var(--high-soft)">${head}
+    ${empty?`<span style="font-size:12.5px">Nothing is saved for ${esc(what)} in this ledger.</span>`:`<span style="font-size:12.5px">This permanently deletes everything saved for ${esc(what)} in <b>${esc(lgName(C.acct))}</b> only — other channels and other dates are not touched:</span>
+    <ul style="margin:0 0 0 18px;font-size:12.5px;line-height:1.7">
+      ${li(P.daysN,`# day record${P.daysN===1?'':'s'}${P.sessions?` (${fmtInt(P.sessions)} reconciled session${P.sessions===1?'':'s'}${P.closed?`, ${fmtInt(P.closed)} closed day${P.closed===1?'':'s'}`:''})`:''}`)}
+      ${li(P.items,`# item${P.items===1?'':'s'} raised on ${C.scope==='day'?'this day':'these days'} (${fmtInt(P.open)} still open, the rest resolved)`)}
+      ${li(P.files.length,`# uploaded file part${P.files.length===1?'':'s'}`)}${P.shared?`<li class="faint">${fmtInt(P.shared)} file part(s) are kept because another day or a saved comparison uses them</li>`:''}
+      ${P.reopen?li(P.reopen,`# item${P.reopen===1?'':'s'} from other days that ${C.scope==='day'?'this day':'these days'} cleared automatically will be <b>reopened</b>`):''}
+      ${P.notes?li(P.notes,`# “seen again” note${P.notes===1?'':'s'} on other days’ items will be removed`):''}
+    </ul>
+    <label class="row" style="gap:6px;font-size:12.5px"><input type="checkbox" id="clrAck"> I understand this can’t be undone</label>`}
+    <div class="row" style="gap:8px"><span class="spacer"></span><button class="btn sm" id="clrCancel">Cancel</button>${empty?'':`<button class="btn sm" id="clrGo" disabled style="background:var(--high);border-color:var(--high);color:#fff">Delete everything for ${esc(what)}</button>`}</div></div>`;
+}
+function bindClear(){
+  const c=$('#clrCancel'); if(c) c.onclick=()=>{ LG.clr=null; refreshClear() };
+  const a=$('#clrAck'), g=$('#clrGo'); if(a&&g){ a.onchange=()=>{ g.disabled=!a.checked }; g.onclick=()=>runClear() }
+}
+async function runClear(){
+  const C=LG.clr, P=C&&C.plan; if(!P||C.busy) return;
+  if(!H.db||!H.assets){ toast('Saving isn’t available in this view.'); return }
+  C.busy=true; const what=C.scope==='day'?dLabel(C.key):monthLabel(C.key); let step='';
+  try{
+    step='reopening items on other days'; let i=0;
+    for(const d of P.touch){ overlay(true,`Clearing ${what}`,`Reopening items on other days · ${++i} of ${P.touch.length}`); await H.db.collection('cases').doc(d.id).set(noId(d)) }
+    step='deleting items'; i=0;
+    for(const id of P.caseIds){ if(!(i%10)) overlay(true,`Clearing ${what}`,`Deleting items · ${i} of ${P.caseIds.length}`); i++; await H.db.collection('cases').doc(id).delete() }
+    step='deleting day records'; i=0;
+    for(const id of P.days){ overlay(true,`Clearing ${what}`,`Deleting day records · ${++i} of ${P.days.length}`); await H.db.collection('days').doc(id).delete() }
+    step='deleting files'; i=0; let fail=0;
+    for(const b of P.files){ if(!(i%10)) overlay(true,`Clearing ${what}`,`Deleting files · ${i} of ${P.files.length}`); i++; try{ await H.assets.delete(b) }catch(e){ fail++ } }
+    if(C.scope==='day'&&LG.day===C.key) LG.draft={am:{},pm:{},day:{}};
+    toast(`${what} cleared · ${fmtInt(P.daysN)} day(s), ${fmtInt(P.items)} item(s), ${fmtInt(P.files.length-fail)} file part(s) deleted${P.reopen?`, ${fmtInt(P.reopen)} item(s) reopened`:''}${fail?` · ${fail} file part(s) could not be deleted`:''}`);
+    LG.clr=null; refreshUsage();
+  }catch(e){ console.error(e); toast(`Stopped while ${step}: ${(e&&(e.code||e.message))||e}. Open Clear again to finish — it only lists what is left.`); C.busy=false; LG.clr=null }
+  overlay(false); refreshClear();
 }
 
 /* ============ Dashboard: every ledger (payins + payouts) and the archive, for a chosen period ============ */
