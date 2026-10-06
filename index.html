@@ -717,9 +717,11 @@ function cellToString(v){
   if(typeof v==='number'){ return Number.isInteger(v)&&Math.abs(v)>=1e21? v.toLocaleString('fullwide',{useGrouping:false}) : String(v) }
   return String(v);
 }
-/* Excel date cells → exact "YYYY-MM-DD HH:MM:SS" text from the serial number.
+/* Excel date cells → exact "YYYY-MM-DD HH:MM:SS" text from the serial number, fractions of a second rounded the way Excel shows them.
    (SheetJS's own Date conversion can drift by several seconds, which moves rows across the 12:00 / 00:00 session boundary.) */
-function xlsxSerialStr(v,d1904){ const ms=Math.round((v+(d1904?1462:0)-25569)*86400000); if(!isFinite(ms)) return String(v); return fmtTs(ms) }
+function xlsxSerialStr(v,d1904){ if(!isFinite(v)) return String(v);
+  // whole seconds, rounded from the time-of-day the way Excel displays them (12:00:59.6 → 12:01:00; exact half-seconds round up)
+  const day=Math.floor(v), sec=Math.round((v-day)*86400); return fmtTs(((day+(d1904?1462:0)-25569)*86400+sec)*1000) }
 function xlsxFixDates(wb){
   const d1904=!!(wb.Workbook&&wb.Workbook.WBProps&&wb.Workbook.WBProps.date1904);
   const fix=c=>{ if(c&&c.t==='n'&&c.z&&typeof c.v==='number'&&XLSX.SSF.is_date(c.z)){ c.v=xlsxSerialStr(c.v,d1904); c.t='s'; c.w=c.v } };
