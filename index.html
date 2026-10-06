@@ -2522,7 +2522,11 @@ const ctShort=(t,k)=>CASE_TYPES[t]?CASE_TYPES[t].short(PN(k),isPayout(k)):t;
 const typesFor=k=>Object.keys(CASE_TYPES).filter(t=>!CASE_TYPES[t].settle||provOf(k).settlement);
 /* file layouts the tool knows */
 const PROFILE_NAMES={dp:'Dpaisa payin export',jc:'JC portal export',ept:'EP transaction report',eps:'EP settlement batch',dpp:'Dpaisa payout export',swp:'Swich payout report',jcp:'JC payout report'};
-const PAYOUT_DROP={dpp:['Mobile Number'],jcp:['BENEFICIARYMSISDN','CONSUMER_NO','AC_TO']};
+const PAYOUT_DROP={dpp:['Mobile Number'],jcp:['BENEFICIARYMSISDN','CONSUMER_NO','CONSUMERNO','AC_TO']};
+/* JC payout report comes in two layouts: TRANS_ID / TRX_STATUS / TRX_AMT (CSV export), or TRANSID / TRXSTATUS / TRXAMT
+   with the date in DATETIME and the time in the unnamed column after it (monthly XLSX) */
+const JCP_COLS={v1:{id:'TRANS_ID',st:'TRX_STATUS',amt:'TRX_AMT',gross:'GROSS_AMT'},v2:{id:'TRANSID',st:'TRXSTATUS',amt:'TRXAMT',gross:'GROSSAMT'}};
+const jcpCols=f=>f.headers.some(h=>String(h).toUpperCase()==='TRANSID')?JCP_COLS.v2:JCP_COLS.v1;
 const EP_RC_STATUS='Status (from response code)';
 const IMPLIED_STATUS='Status (implied)', DP_KEY='Dpaisa Transaction ID (from Reference Id)';
 const TS_COL='Date & time (combined)';
@@ -2788,6 +2792,7 @@ function detectProfile(f){
   if(has('Date Time')&&has('Transaction ID')&&has('Status')&&has('Amount')) return dpKind(f);
   if(has('Reference Id')&&has('Transaction Id')&&has('Settlement Amount')&&has('Date')&&has('Time')&&has('Transaction Type')) return 'swp';
   if(has('TRANS_ID')&&has('DATETIME')&&has('TRX_STATUS')&&has('TRX_AMT')) return 'jcp';
+  if(has('TRANSID')&&has('DATETIME')&&has('TRXSTATUS')&&has('TRXAMT')) return 'jcp';
   if(has('System Date Time')&&has('Bill Reference')&&has('Status')&&has('Amount')) return 'jc';
   // EP portal export with one TrxTime date-time column and response codes (status comes from the response code)
   if(has('CustomerTransactionId')&&has('OrderId')&&has('TrxTime')&&!has('TrxDate')&&has('Amount')&&(has('CustomerResponseCode')||has('ChannelResponseCode')||has(EP_RC_STATUS))){ f.epv2=true; return 'ept' }
@@ -2827,7 +2832,7 @@ function profileMap(f,side){
   if(f.profile==='dpp') return f.keyGw? {txnId:ix('Gateway Transaction Id'),provTxnId:ix('Transaction ID'),merchantRef:ix('Merchant Transaction ReferenceID'),amount:ix('Amount'),status:ix('Status'),ts:ix('Date Time')}
                                       : {txnId:ix('Transaction ID'),provTxnId:ix('Gateway Transaction Id'),merchantRef:ix('Merchant Transaction ReferenceID'),amount:ix('Amount'),status:ix('Status'),ts:ix('Date Time')};
   if(f.profile==='swp') return {txnId:ix(DP_KEY),provTxnId:ix('Transaction Id'),amount:ix('Settlement Amount'),status:ix(IMPLIED_STATUS),ts:ix(TS_COL)};
-  if(f.profile==='jcp') return {txnId:ix('TRANS_ID'),amount:ix('TRX_AMT'),status:ix('TRX_STATUS'),ts:ix('DATETIME')};
+  if(f.profile==='jcp'){ const c=jcpCols(f); return {txnId:ix(c.id),amount:ix(c.amt),status:ix(c.st),ts:ix(TS_COL)!==undefined?ix(TS_COL):ix('DATETIME')} }
   return autoMap(f,side);
 }
 /* EP files: drop personal-data columns, join the separate date and time columns into one timestamp column */
@@ -2850,6 +2855,12 @@ function prepFile(f){
   if(f.builtin==='ept'){ d=ix('TrxDate'); t=ix('TrxTime') } else if(f.builtin==='eps'){ d=ix('Transaction Date'); t=ix('Transaction Time') } else if(f.builtin==='swp'){ d=ix('Date'); t=ix('Time') }
   if(d>=0&&t>=0){ const tt=v=>{ const x=String(v??'').trim(); return f.builtin==='swp'? x.replace(/^(\d{1,2}:\d{2}:\d{2})\.\d+$/,'$1') : x };
     f.headers=[...f.headers,TS_COL]; f.rows=f.rows.map(r=>[...r,`${String(r[d]??'').trim()} ${tt(r[t])}`.trim()]) }
+  if(f.builtin==='jcp'&&jcpCols(f)===JCP_COLS.v2){
+    // DATETIME holds the date only; the time is in the unnamed column right after it (read as "1899-12-30 HH:MM:SS")
+    const di=ix('DATETIME'), ti=di+1, timeOf=v=>{ const m=/(\d{1,2}):(\d{2})(?::(\d{2}))?\s*$/.exec(String(v??'').trim()); return m?`${m[1].padStart(2,'0')}:${m[2]}:${m[3]||'00'}`:'' };
+    const hasTime=/^Column \d+$/.test(f.headers[ti]||'')&&f.rows.some(r=>timeOf(r[ti]));
+    if(hasTime){ f.headers=[...f.headers,TS_COL]; f.rows=f.rows.map(r=>{ const d=String(r[di]??'').trim(), t=timeOf(r[ti]); return [...r,t?`${d.replace(/\s+00:00:00$/,'')} ${t}`:d] }) }
+  }
   if(f.builtin==='swp'){ const ri=ix('Reference Id'); f.headers=[...f.headers,DP_KEY,IMPLIED_STATUS]; f.rows=f.rows.map(r=>[...r,String(r[ri]??'').trim().replace(/^[A-Za-z_]+/,''),'Paid']) }
 }
 /* Dpaisa payout export holds both processors: keep only this ledger's Tender Type (EasyPaisa → Swich, JazzCash → JC) */
@@ -2913,7 +2924,7 @@ function preChecks(acct,ds,s,fi,fp){
   if(isPayout(acct)){ const byS={}; for(const r of fi.rows){ const v=String(r[profileMap(fi,'internal').status]??'').trim()||'(blank)'; byS[v]=(byS[v]||0)+1 }
     out.push({lvl:'ok',msg:`Dpaisa statuses: ${Object.entries(byS).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${k} ${fmtInt(v)}`).join(' · ')}`});
     if(fp.profile==='swp') out.push({lvl:'ok',msg:`Swich report lists disbursements only — every row counts as paid; matched on the Dpaisa Transaction ID inside Reference Id · amount compared = Settlement Amount (the transaction amount), not Net Amount`});
-    if(fp.profile==='jcp'){ const st=profileMap(fp,'provider').status, nc=fp.rows.filter(r=>String(r[st]).trim().toUpperCase()!=='COMPLETED').length; out.push(nc?{lvl:'warn',msg:`${fmtInt(nc)} JC rows are not COMPLETED — counted as not paid`}:{lvl:'ok',msg:'Every JC row is COMPLETED · matched JC TRANS_ID = Dpaisa Gateway Transaction Id · amount compared = TRX_AMT (the transaction amount), not GROSS_AMT; FEE and FED are reported separately'}) } }
+    if(fp.profile==='jcp'){ const st=profileMap(fp,'provider').status, nc=fp.rows.filter(r=>String(r[st]).trim().toUpperCase()!=='COMPLETED').length; out.push(nc?{lvl:'warn',msg:`${fmtInt(nc)} JC rows are not COMPLETED — counted as not paid`}:{lvl:'ok',msg:(c=>`Every JC row is COMPLETED · matched JC ${c.id} = Dpaisa Gateway Transaction Id · amount compared = ${c.amt} (the transaction amount), not ${c.gross}; FEE and FED are reported separately`)(jcpCols(fp))}) } }
   if(fp.profile==='jc'&&fp.meta&&fp.meta.fromDate){ const d=parseTs(fp.meta.fromDate,'DMY'); const want=Date.parse(ds+'T00:00:00Z'); out.push(d===want?{lvl:'ok',msg:`JC report date ${fp.meta.fromDate} matches this day`}:{lvl:'bad',msg:`JC report is for ${fp.meta.fromDate}${fp.meta.toDate&&fp.meta.toDate!==fp.meta.fromDate?' – '+fp.meta.toDate:''}, not ${dLabel(ds)}`}) }
   // rows outside the 12-hour window
   const win=(f,col,order)=>{ if(col===undefined) return null; let inW=0,out0=0; const base=Date.parse(ds+'T00:00:00Z');
@@ -3365,7 +3376,7 @@ function miPlan(){
   const lay=(f,side)=>{ const want=wantProfile(acct,side); checks.push(f.profile===want||f.profObj?{lvl:'ok',msg:`${PROFILE_NAMES[want]||side} recognised · ${fmtInt(f.split?f.split.total:f.rows.length)} rows`}:{lvl:'warn',msg:`${side} layout not recognised`}) };
   lay(fi,'internal'); lay(fp,'provider'); if(fs) checks.push(fs.profile==='eps'?{lvl:'ok',msg:`EP settlement file recognised · ${fmtInt(fs.rows.length)} rows · gross PKR ${pk(settleTotals(fs).gross)}`}:{lvl:'bad',msg:'The settlement file isn’t an EP settlement report — it will be ignored'});
   if(fi.split){ const o=Object.entries(fi.split.other); checks.push({lvl:'ok',msg:`Dpaisa payout export: ${fmtInt(fi.split.kept)} rows belong to ${P}${o.length?` · ${o.map(([k,n])=>`${fmtInt(n)} ${k}`).join(', ')} skipped (other processor)`:''}`}) }
-  if(fp.profile==='jcp') checks.push({lvl:'ok',msg:'Amount compared = TRX_AMT (the transaction amount), not GROSS_AMT; FEE and FED are reported separately'});
+  if(fp.profile==='jcp') { const c=jcpCols(fp); checks.push({lvl:'ok',msg:`Amount compared = ${c.amt} (the transaction amount), not ${c.gross}; FEE and FED are reported separately`}) }
   if(fp.profile==='swp') checks.push({lvl:'ok',msg:'Amount compared = Settlement Amount (the transaction amount), not Net Amount'});
   const dropped=[...(fi.dropped||[]),...(fp.dropped||[])]; if(dropped.length) checks.push({lvl:'ok',msg:`Personal-data columns not kept: ${dropped.join(', ')}`});
   for(const [b,who] of [[bi,'Dpaisa'],[bp,P]].concat(bs?[[bs,'Settlement']]:[])){
